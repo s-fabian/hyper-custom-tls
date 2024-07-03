@@ -38,7 +38,10 @@ use rustls::{
 use webpki::{alg_id, EndEntityCert};
 
 #[derive(Clone, Debug)]
-struct Verify(CertificateDer<'static>);
+struct Verify {
+    cert: CertificateDer<'static>,
+    verify_server_name: bool,
+}
 
 fn der(pem: &[u8]) -> CertificateDer<'static> {
     let mut ca = io::Cursor::new(pem);
@@ -115,12 +118,14 @@ impl ServerCertVerifier for Verify {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
-        let cert = EndEntityCert::try_from(end_entity)
-            .map_err(|e| Error::Other(OtherError(Arc::new(e))))?;
-        cert.verify_is_valid_for_subject_name(server_name)
-            .map_err(|e| Error::Other(OtherError(Arc::new(e))))?;
+        if self.verify_server_name {
+            let cert = EndEntityCert::try_from(end_entity)
+                .map_err(|e| Error::Other(OtherError(Arc::new(e))))?;
+            cert.verify_is_valid_for_subject_name(server_name)
+                .map_err(|e| Error::Other(OtherError(Arc::new(e))))?;
+        }
 
-        if end_entity != &self.0 {
+        if end_entity != &self.cert {
             return Err(Error::Other(OtherError(Arc::new(CannotVerify))));
         }
 
@@ -168,15 +173,20 @@ impl ServerCertVerifier for Verify {
 
 pub fn make_client<B>(
     pem: &[u8],
+    verify_server_name: bool,
 ) -> Result<Client<HttpsConnector<HttpConnector>, B>, Box<dyn std::error::Error>>
 where
     B: Body + Send,
-    <B as Body>::Data: Send, {
+    <B as Body>::Data: Send,
+{
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let tls = rustls::ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(Verify(der(pem))))
+        .with_custom_certificate_verifier(Arc::new(Verify {
+            cert: der(pem),
+            verify_server_name,
+        }))
         .with_no_client_auth();
 
     let https = hyper_rustls::HttpsConnectorBuilder::new()
@@ -191,14 +201,12 @@ where
 #[cfg(test)]
 mod tests {
     use http_body_util::Full;
-    use hyper::body::Bytes;
-    use hyper::Request;
+    use hyper::{body::Bytes, Request};
 
     #[tokio::test]
     async fn test() {
-        let client = crate::make_client(
-            include_bytes!("../badssl-com.pem")
-        ).expect("Could not make client");
+        let client = crate::make_client(include_bytes!("../badssl-com.pem"), true)
+            .expect("Could not make client");
 
         let req = Request::builder()
             .uri("https://self-signed.badssl.com/")
