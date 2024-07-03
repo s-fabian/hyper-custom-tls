@@ -171,10 +171,16 @@ impl ServerCertVerifier for Verify {
     }
 }
 
+pub type CustomClient<B>
+where
+    B: Body + Send,
+    <B as Body>::Data: Send,
+= Client<HttpsConnector<HttpConnector>, B>;
+
 pub fn make_client<B>(
     pem: &[u8],
     verify_server_name: bool,
-) -> Result<Client<HttpsConnector<HttpConnector>, B>, Box<dyn std::error::Error>>
+) -> Result<CustomClient<B>, Box<dyn std::error::Error>>
 where
     B: Body + Send,
     <B as Body>::Data: Send,
